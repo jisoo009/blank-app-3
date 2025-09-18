@@ -132,12 +132,37 @@ with st.spinner("공개 데이터와 예시 데이터를 불러오는 중..."):
     public = load_public_datasets()
     user_input = load_user_input_example()
 
-# --- 데이터 선택 옵션 ---
-st.sidebar.header("📊 데이터 선택")
+# --- 사이드바 옵션 ---
+st.sidebar.header("⚙️ 데이터/분석 옵션")
+
+# 데이터셋 선택
 dataset_choice = st.sidebar.radio(
-    "어떤 데이터를 보시겠습니까?",
+    "데이터셋 선택",
     ("NOAA 해수온 (Pathfinder)", "기상청 폭염일수 (서울)", "사용자 입력 예시 데이터"),
-    help="시각화할 데이터셋을 선택하세요."
+)
+
+# 분석 기간 선택 (기본: 전체 범위)
+if dataset_choice == "NOAA 해수온 (Pathfinder)":
+    data_min = public["sst"]["date"].min().date()
+    data_max = public["sst"]["date"].max().date()
+elif dataset_choice == "기상청 폭염일수 (서울)":
+    data_min = date(int(public["kma_heatwave"]["year"].min()), 1, 1)
+    data_max = date(int(public["kma_heatwave"]["year"].max()), 12, 31)
+else:
+    data_min = user_input["sst_east"]["date"].min().date()
+    data_max = user_input["sst_east"]["date"].max().date()
+
+period = st.sidebar.date_input(
+    "분석 기간 선택",
+    [data_min, data_max],
+    min_value=data_min,
+    max_value=data_max,
+)
+
+# 분석 옵션 선택
+analysis_option = st.sidebar.selectbox(
+    "분석 옵션 선택",
+    ("추세 분석", "계절성 분석", "간단 요약 통계"),
 )
 
 st.write("## 🌊 해수온/폭염 대시보드")
@@ -145,27 +170,70 @@ st.write("## 🌊 해수온/폭염 대시보드")
 # --- 선택에 따른 시각화 ---
 if dataset_choice == "NOAA 해수온 (Pathfinder)":
     st.subheader("🌍 NOAA Pathfinder 해수온 (글로벌 평균)")
-    st.line_chart(public["sst"].set_index("date"))
+    df = public["sst"]
+    if isinstance(period, list) and len(period) == 2:
+        df = df[(df["date"] >= pd.to_datetime(period[0])) & (df["date"] <= pd.to_datetime(period[1]))]
+    st.line_chart(df.set_index("date"))
+
+    if analysis_option == "간단 요약 통계":
+        st.write(df["sst_global_mean_C"].describe())
+    elif analysis_option == "추세 분석":
+        fig = px.scatter(df, x="date", y="sst_global_mean_C", trendline="ols",
+                         title="추세선 포함 해수온 변화")
+        st.plotly_chart(fig, use_container_width=True)
+    elif analysis_option == "계절성 분석":
+        df["month"] = df["date"].dt.month
+        monthly_avg = df.groupby("month")["sst_global_mean_C"].mean().reset_index()
+        fig = px.line(monthly_avg, x="month", y="sst_global_mean_C",
+                      title="월별 평균 해수온 (계절성 분석)")
+        st.plotly_chart(fig, use_container_width=True)
 
 elif dataset_choice == "기상청 폭염일수 (서울)":
     st.subheader("🔥 기상청 폭염일수 (서울)")
-    fig = px.bar(public["kma_heatwave"], x="year", y="heatwave_days_seoul",
+    df = public["kma_heatwave"]
+    if isinstance(period, list) and len(period) == 2:
+        df = df[(df["year"] >= period[0].year) & (df["year"] <= period[1].year)]
+
+    fig = px.bar(df, x="year", y="heatwave_days_seoul",
                  labels={"year": "연도", "heatwave_days_seoul": "폭염일수"})
     st.plotly_chart(fig, use_container_width=True)
+
+    if analysis_option == "간단 요약 통계":
+        st.write(df["heatwave_days_seoul"].describe())
+    elif analysis_option == "추세 분석":
+        fig = px.scatter(df, x="year", y="heatwave_days_seoul", trendline="ols",
+                         title="연도별 폭염일수 추세")
+        st.plotly_chart(fig, use_container_width=True)
+    elif analysis_option == "계절성 분석":
+        st.info("⚠️ 폭염일수 데이터는 연도 단위라서 월별 계절성 분석이 불가능합니다.")
 
 elif dataset_choice == "사용자 입력 예시 데이터":
     st.subheader("📝 사용자 입력 설문 예시 데이터")
     col1, col2 = st.columns(2)
-
     with col1:
         fig1 = px.pie(user_input["survey"], names="response", values="count",
                       title="폭염 인식 설문")
         st.plotly_chart(fig1, use_container_width=True)
-
     with col2:
         fig2 = px.bar(user_input["impacts"], x="impact", y="percent",
                       title="폭염 영향")
         st.plotly_chart(fig2, use_container_width=True)
 
     st.subheader("🌊 동해 평균 해수온 (예시)")
-    st.line_chart(user_input["sst_east"].set_index("date"))
+    df = user_input["sst_east"]
+    if isinstance(period, list) and len(period) == 2:
+        df = df[(df["date"] >= pd.to_datetime(period[0])) & (df["date"] <= pd.to_datetime(period[1]))]
+    st.line_chart(df.set_index("date"))
+
+    if analysis_option == "간단 요약 통계":
+        st.write(df["sst_east_C"].describe())
+    elif analysis_option == "추세 분석":
+        fig = px.scatter(df, x="date", y="sst_east_C", trendline="ols",
+                         title="동해 해수온 추세")
+        st.plotly_chart(fig, use_container_width=True)
+    elif analysis_option == "계절성 분석":
+        df["month"] = df["date"].dt.month
+        monthly_avg = df.groupby("month")["sst_east_C"].mean().reset_index()
+        fig = px.line(monthly_avg, x="month", y="sst_east_C",
+                      title="동해 해수온 월별 평균 (계절성 분석)")
+        st.plotly_chart(fig, use_container_width=True)
