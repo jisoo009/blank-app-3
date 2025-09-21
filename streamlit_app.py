@@ -1,4 +1,3 @@
-# streamlit_app.py
 """
 Streamlit 앱: 해수온 대시보드 (한국어 UI)
 - 공개 데이터 대시보드: NOAA SST (Pathfinder / OISST) + 기상청 폭염일수(서울)
@@ -19,6 +18,7 @@ Streamlit 앱: 해수온 대시보드 (한국어 UI)
 import io
 import sys
 import os
+import tempfile
 from datetime import datetime, date
 import time
 import requests
@@ -49,7 +49,7 @@ TODAY = pd.to_datetime(date.today())
 @st.cache_data(ttl=60*60)
 def download_text(url, max_retries=2, timeout=20):
     last_exc = None
-    for i in range(max_retries+1):
+    for i in range(max_retries + 1):
         try:
             r = requests.get(url, timeout=timeout)
             r.raise_for_status()
@@ -59,7 +59,7 @@ def download_text(url, max_retries=2, timeout=20):
             time.sleep(1 + i)
     raise last_exc
 
-# --- 공개 데이터 불러오기: 시도 순서 ---
+# --- 공개/예시 데이터 생성 함수 ---
 def load_noaa_pathfinder_example():
     yrs = pd.date_range("1985-01-01", "2024-12-01", freq="MS")
     np.random.seed(0)
@@ -69,6 +69,7 @@ def load_noaa_pathfinder_example():
     sst = base + seasonal + noise
     df = pd.DataFrame({"date": yrs, "sst_global_mean_C": sst})
     return df
+
 
 def load_kma_heatwave_example():
     years = np.arange(1980, 2025)
@@ -85,26 +86,52 @@ def load_public_datasets():
     notices = []
     try:
         PATHFINDER_URL = "https://www.ncei.noaa.gov/data/pathfinder-sst/combined/pathfinder-v5.3-daily-mean.nc"
+        # 안전하게 임시파일에 저장
         ds_bytes = download_text(PATHFINDER_URL, max_retries=2)
-        with open("/tmp/pathfinder.nc", "wb") as f:
-            f.write(ds_bytes)
-        ds = xr.open_dataset("/tmp/pathfinder.nc")
-        da = ds.get("sst", None)
-        if da is None:
-            raise ValueError("sst variable not found in dataset")
-        sst_monthly = da.resample(time="1M").mean(dim="time").mean(dim=["lat", "lon"]).to_series()
-        df_sst = sst_monthly.reset_index()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".nc") as tmp:
+            tmp_path = tmp.name
+            tmp.write(ds_bytes)
+
+        ds = xr.open_dataset(tmp_path)
+        # 변수 이름이 다를 수 있으므로 몇 가지 후보를 확인
+        possible_vars = [v for v in ds.data_vars]
+        var_name = None
+        for candidate in ["sst", "sea_surface_temperature", "sea_surface_temp"]:
+            if candidate in possible_vars:
+                var_name = candidate
+                break
+        if var_name is None:
+            # 가장 첫 번째 수온 변수를 사용
+            if len(possible_vars) > 0:
+                var_name = possible_vars[0]
+            else:
+                raise ValueError("NOAA 데이터셋에 수온 변수 없음")
+
+        da = ds[var_name]
+        # 월별 평균, 전지구 평균(위도/경도 평균) 계산 — 차원이 있을 때만 적용
+        try:
+            sst_monthly = da.resample(time="1M").mean(dim="time")
+            if "lat" in sst_monthly.dims and "lon" in sst_monthly.dims:
+                sst_monthly = sst_monthly.mean(dim=[d for d in ["lat", "lon"] if d in sst_monthly.dims])
+            sst_series = sst_monthly.to_series()
+        except Exception:
+            # 단순 변환 실패 시 예시로 대체
+            raise
+
+        df_sst = sst_series.reset_index()
         df_sst.columns = ["date", "sst_global_mean_C"]
         df_sst["date"] = pd.to_datetime(df_sst["date"])
-        df_sst = df_sst[df_sst["date"] <= TODAY]
-        return {"sst": df_sst, "kma_heatwave": load_kma_heatwave_example(), "notice": notices}
+        df_sst = df_sst[df_sst["date"] <= TODAY].copy()
+
+        df_kma = load_kma_heatwave_example()
+        return {"sst": df_sst, "kma_heatwave": df_kma, "notices": notices}
     except Exception as e:
         notices.append(f"NOAA Pathfinder 데이터 로드 실패: {str(e)} — 예시 데이터로 대체합니다.")
         df_sst = load_noaa_pathfinder_example()
-        df_sst = df_sst[df_sst["date"] <= TODAY]
+        df_sst = df_sst[df_sst["date"] <= TODAY].copy()
         notices.append("대체 데이터는 교육/시연용 예시입니다. (실제 분석 시 원본 데이터를 연결하세요)")
         df_kma = load_kma_heatwave_example()
-        return {"sst": df_sst, "kma_heatwave": df_kma, "notice": notices}
+        return {"sst": df_sst, "kma_heatwave": df_kma, "notices": notices}
 
 # --- 사용자 입력 데이터 (프롬프트 기반 내장 예시)
 @st.cache_data(ttl=60*60)
@@ -124,7 +151,7 @@ def load_user_input_example():
     noise = np.random.normal(scale=0.3, size=len(months))
     sst_east = trend + seasonal + noise
     df_east = pd.DataFrame({"date": months, "sst_east_C": sst_east})
-    df_east = df_east[df_east["date"] <= TODAY]
+    df_east = df_east[df_east["date"] <= TODAY].copy()
     return {"survey": survey, "impacts": impacts, "sst_east": df_east}
 
 # --- 데이터 불러오기 ---
@@ -154,7 +181,7 @@ else:
 
 period = st.sidebar.date_input(
     "분석 기간 선택",
-    [data_min, data_max],
+    value=(data_min, data_max),
     min_value=data_min,
     max_value=data_max,
 )
@@ -167,13 +194,26 @@ analysis_option = st.sidebar.selectbox(
 
 st.write("## 🌊 해수온/폭염 대시보드")
 
+# helper: normalize period to (start, end)
+def _normalize_period(p, fallback_start, fallback_end):
+    if p is None:
+        return (fallback_start, fallback_end)
+    if isinstance(p, (list, tuple)):
+        if len(p) == 2:
+            return (p[0], p[1])
+    # single date provided
+    return (p, p)
+
+period_start, period_end = _normalize_period(period, data_min, data_max)
+
 # --- 선택에 따른 시각화 ---
 if dataset_choice == "NOAA 해수온 (Pathfinder)":
     st.subheader("🌍 NOAA Pathfinder 해수온 (글로벌 평균)")
-    df = public["sst"]
-    if isinstance(period, list) and len(period) == 2:
-        df = df[(df["date"] >= pd.to_datetime(period[0])) & (df["date"] <= pd.to_datetime(period[1]))]
-    st.line_chart(df.set_index("date"))
+    df = public["sst"].copy()
+    df = df[(df["date"] >= pd.to_datetime(period_start)) & (df["date"] <= pd.to_datetime(period_end))]
+
+    # 기본 라인 차트
+    st.line_chart(df.set_index("date")["sst_global_mean_C"])
 
     if analysis_option == "간단 요약 통계":
         st.write(df["sst_global_mean_C"].describe())
@@ -182,17 +222,18 @@ if dataset_choice == "NOAA 해수온 (Pathfinder)":
                          title="추세선 포함 해수온 변화")
         st.plotly_chart(fig, use_container_width=True)
     elif analysis_option == "계절성 분석":
-        df["month"] = df["date"].dt.month
-        monthly_avg = df.groupby("month")["sst_global_mean_C"].mean().reset_index()
+        df2 = df.copy()
+        df2["month"] = df2["date"].dt.month
+        monthly_avg = df2.groupby("month")["sst_global_mean_C"].mean().reset_index()
         fig = px.line(monthly_avg, x="month", y="sst_global_mean_C",
                       title="월별 평균 해수온 (계절성 분석)")
         st.plotly_chart(fig, use_container_width=True)
 
 elif dataset_choice == "기상청 폭염일수 (서울)":
     st.subheader("🔥 기상청 폭염일수 (서울)")
-    df = public["kma_heatwave"]
-    if isinstance(period, list) and len(period) == 2:
-        df = df[(df["year"] >= period[0].year) & (df["year"] <= period[1].year)]
+    df = public["kma_heatwave"].copy()
+    # period_start/period_end are date objects
+    df = df[(df["year"] >= period_start.year) & (df["year"] <= period_end.year)]
 
     fig = px.bar(df, x="year", y="heatwave_days_seoul",
                  labels={"year": "연도", "heatwave_days_seoul": "폭염일수"})
@@ -220,10 +261,9 @@ elif dataset_choice == "사용자 입력 예시 데이터":
         st.plotly_chart(fig2, use_container_width=True)
 
     st.subheader("🌊 동해 평균 해수온 (예시)")
-    df = user_input["sst_east"]
-    if isinstance(period, list) and len(period) == 2:
-        df = df[(df["date"] >= pd.to_datetime(period[0])) & (df["date"] <= pd.to_datetime(period[1]))]
-    st.line_chart(df.set_index("date"))
+    df = user_input["sst_east"].copy()
+    df = df[(df["date"] >= pd.to_datetime(period_start)) & (df["date"] <= pd.to_datetime(period_end))]
+    st.line_chart(df.set_index("date")["sst_east_C"])
 
     if analysis_option == "간단 요약 통계":
         st.write(df["sst_east_C"].describe())
@@ -232,8 +272,16 @@ elif dataset_choice == "사용자 입력 예시 데이터":
                          title="동해 해수온 추세")
         st.plotly_chart(fig, use_container_width=True)
     elif analysis_option == "계절성 분석":
-        df["month"] = df["date"].dt.month
-        monthly_avg = df.groupby("month")["sst_east_C"].mean().reset_index()
+        df2 = df.copy()
+        df2["month"] = df2["date"].dt.month
+        monthly_avg = df2.groupby("month")["sst_east_C"].mean().reset_index()
         fig = px.line(monthly_avg, x="month", y="sst_east_C",
                       title="동해 해수온 월별 평균 (계절성 분석)")
         st.plotly_chart(fig, use_container_width=True)
+
+# --- 하단: 로드/알림 ---
+if public.get("notices"):
+    for n in public.get("notices"):
+        st.warning(n)
+
+"""
