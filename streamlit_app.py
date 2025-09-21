@@ -152,11 +152,11 @@ def scatter_with_optional_trend(df, x, y, title):
         import statsmodels.api as sm
         fig = px.scatter(df, x=x, y=y, trendline="ols", title=title)
     except ModuleNotFoundError:
-        # statsmodels 없으면 numpy.polyfit으로 선형 추세선
         fig = px.scatter(df, x=x, y=y, title=title)
         coeffs = np.polyfit(pd.to_numeric(df[x]), df[y], 1)
         trend = coeffs[0]*pd.to_numeric(df[x]) + coeffs[1]
-        fig.add_traces(px.line(x=df[x], y=trend, name="Trend").data)
+        trend_trace = px.line(x=df[x], y=trend, name="Trend").data[0]
+        fig.add_trace(trend_trace)
     return fig
 
 # --- 데이터별 시각화 ---
@@ -177,4 +177,4 @@ if dataset_choice=="NOAA 해수온 (OISST)":
         fig = px.line(monthly_avg,x="month",y="sst_global_mean_C",title="월별 평균 해수온 (계절성 분석)")
         st.plotly_chart(fig,use_container_width=True)
 
-# (폭염일수, 사용자 예시 데이터 시각화 코드 동일, 기존 코드 유지)
+# 폭염일수, 사용자 예시 데이터 시각화 코드는 기존과 동일하게 유지
