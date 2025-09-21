@@ -200,4 +200,25 @@ elif dataset_choice == "사용자 입력 예시 데이터":
     with col1:
         fig1 = px.pie(user_input["survey"], names="response", values="count",
                       title="폭염 인식 설문")
-        st.plotly_chart(fig1, use_con
+        st.plotly_chart(fig1, use_container_width=True)
+    with col2:
+        fig2 = px.bar(user_input["impacts"], x="impact", y="percent",
+                      title="폭염 영향")
+        st.plotly_chart(fig2, use_container_width=True)
+
+    st.subheader("🌊 동해 평균 해수온 (예시)")
+    df = user_input["sst_east"]
+    if isinstance(period, list) and len(period) == 2:
+        df = df[(df["date"] >= pd.to_datetime(period[0])) & (df["date"] <= pd.to_datetime(period[1]))]
+    st.line_chart(df.set_index("date"))
+
+    if analysis_option == "간단 요약 통계":
+        st.write(df["sst_east_C"].describe())
+    elif analysis_option == "추세 분석":
+        st.plotly_chart(scatter_with_optional_trend(df, "date", "sst_east_C", "동해 해수온 추세"), use_container_width=True)
+    elif analysis_option == "계절성 분석":
+        df["month"] = df["date"].dt.month
+        monthly_avg = df.groupby("month")["sst_east_C"].mean().reset_index()
+        fig = px.line(monthly_avg, x="month", y="sst_east_C",
+                      title="동해 해수온 월별 평균 (계절성 분석)")
+        st.plotly_chart(fig, use_container_width=True)
